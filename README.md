@@ -1,6 +1,6 @@
-# luada README
+# LuaDA
 
-This is the README for your extension "luada". After writing up a brief description, we recommend including the following sections.
+Lua Debug Adapter
 
 ## Features
 
