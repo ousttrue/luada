@@ -256,13 +256,37 @@ for i, arg in ipairs(args) do
     end
 end
 
+---@class Breakpoint
+---@field id number
+---@field source any
+---@field line number
+---@field verified boolean
+local Breakpoint = {
+    __tostring = function(self)
+        return string.format("<BreakPoint %d: %s:%d, %s>", self.id, self.source.path, self.line, self.verified)
+    end,
+}
+Breakpoint.new = function(id, source, line, verified)
+    local instance = {
+        id = id,
+        source = {
+            path = source,
+        },
+        line = line,
+        verified = verified,
+    }
+    Breakpoint.__index = Breakpoint
+    setmetatable(instance, Breakpoint)
+    return instance
+end
+
 ---@class DA
 ---@field input file*
 ---@field output file*
 ---@field next_seq number
 ---@field queue any[]
 ---@field running_stack boolean[]
----@field breakpoints any[]
+---@field breakpoints Breakpoint[]
 ---@field next_breakpoint_id number
 local DA = {
     enqueue = function(self, action)
@@ -272,24 +296,10 @@ local DA = {
     add_breakpoint = function(self, source, line)
         local match = self:match_breakpoint(source, line)
         if match then
-            return {
-                id = match.id,
-                source = {
-                    path = match.source,
-                },
-                line = match.line,
-                verified = false,
-            }
+            return Breakpoint.new(match.id, match.source.path, match.line, false)
         end
 
-        local bp = {
-            id = self.next_breakpoint_id,
-            source = {
-                path = source,
-            },
-            line = line,
-            verified = true,
-        }
+        local bp = Breakpoint.new(self.next_breakpoint_id, source, line, true)
         self.next_breakpoint_id = self.next_breakpoint_id + 1
         table.insert(self.breakpoints, bp)
         return bp
@@ -297,7 +307,10 @@ local DA = {
 
     match_breakpoint = function(self, source, line)
         for i, b in ipairs(self.breakpoints) do
-            io.stderr:write(string.format("#%s:%d <=> %s:%d#", b.source.path, b.line, source, line))
+            self:send_message("output", {
+                category = "stderr",
+                output = string.format("#%s:%d <=> %s:%d#", b.source.path, b.line, source, line),
+            })
             if b.line == line then
                 if b.source.path == source then
                     -- match
@@ -392,7 +405,10 @@ local DA = {
 
         local match
         if self.next then
-            io.stderr:write("next!\n")
+            self:send_event("output", {
+                category = "stderr",
+                output = "next!\n",
+            })
             self.next = false
         else
             match = self:match_breakpoint(source, line)
@@ -401,7 +417,10 @@ local DA = {
                 return
             end
             -- hit breakpoint
-            io.stderr:write("break!\n")
+            self:send_event("output", {
+                category = "stderr",
+                output = "break!\n",
+            })
         end
 
         -- clear
@@ -418,7 +437,7 @@ local DA = {
                 if not k then
                     break
                 end
-                io.stderr:write(string.format("(%q)[%q = %q]", stack_level, k, v))
+                -- io.stderr:write(string.format("(%q)[%q = %q]", stack_level, k, v))
                 i = i + 1
                 if k ~= "(*temporary)" then
                     table.insert(variables, {
@@ -451,7 +470,7 @@ local DA = {
                 if not k then
                     break
                 end
-                io.stderr:write(string.format("(%q)[%q = %q]", stack_level, k, v))
+                -- io.stderr:write(string.format("(%q)[%q = %q]", stack_level, k, v))
                 i = i + 1
                 table.insert(variables, {
                     name = k,
@@ -512,7 +531,7 @@ local DA = {
         -- run
         self:send_event("output", {
             category = "stderr",
-            output = "[luada]LAUNCH...",
+            output = string.format("[luada]LAUNCH: %s...\n", self.debugee.program)
         })
 
         local rc
@@ -522,7 +541,7 @@ local DA = {
         if success then
             self:send_event("output", {
                 category = "stderr",
-                output = "[luada]EXIT",
+                output = "[luada]EXIT\n",
             })
 
             -- exit
@@ -533,7 +552,7 @@ local DA = {
         else
             self:send_event("output", {
                 category = "stderr",
-                output = string.format("[luada]%q", err),
+                output = string.format("[luada]%q\n", err),
             })
         end
     end,
@@ -561,7 +580,12 @@ local DA = {
             local breakpoints = {}
             for i, b in ipairs(parsed.arguments.breakpoints) do
                 local created = self:add_breakpoint(parsed.arguments.source.path, b.line)
+                self:send_event("output", {
+                    category = "stderr",
+                    output = string.format("created: %s\n", created),
+                })
                 if created then
+                    setmetatable(created, nil)
                     table.insert(breakpoints, created)
                 end
             end
