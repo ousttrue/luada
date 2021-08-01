@@ -1,5 +1,10 @@
 {
     "name": "luada",
+    "publisher": "ousttrue",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/ousttrue/luada.git"
+    },
     "displayName": "luada",
     "description": "lua debug adapter",
     "version": "0.0.1",
@@ -77,6 +82,7 @@
         "glob": "^7.1.7",
         "mocha": "^8.4.0",
         "typescript": "^4.3.2",
+        "vsce": "^1.96.1",
         "vscode-test": "^1.5.2"
     },
     "dependencies": {
