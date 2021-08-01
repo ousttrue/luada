@@ -256,6 +256,17 @@ for i, arg in ipairs(args) do
     end
 end
 
+---@param src string
+---@return string
+local function normalize_path(src)
+    local drive, path = src:match("^(%w:)(.*)")
+    if not drive then
+        drive = ""
+        path = src
+    end
+    return drive:lower() .. path:gsub("/", "\\")
+end
+
 ---@class Breakpoint
 ---@field id number
 ---@field source any
@@ -572,7 +583,7 @@ local DA = {
             })
         elseif parsed.command == "launch" then
             self.debugee = {
-                program = parsed.arguments.program,
+                program = normalize_path(parsed.arguments.program),
                 args = parsed.arguments.args,
             }
             return self:new_response(parsed.seq, parsed.command)
