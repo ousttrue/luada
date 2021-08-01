@@ -1,6 +1,4 @@
 import * as vscode from 'vscode';
-import path = require('path');
-
 
 function createDebugAdapterDescriptorFactory(context: vscode.ExtensionContext): vscode.DebugAdapterDescriptorFactory {
     return {
@@ -12,11 +10,8 @@ function createDebugAdapterDescriptorFactory(context: vscode.ExtensionContext): 
             const runtime = `./LuaJIT/src/luajit.exe`;
             const runtimeArgs: string[] = [
                 `luada.lua`,
-                '--DEBUG'
+                // '--DEBUG'
             ];
-
-            const ch = vscode.window.createOutputChannel("LuaDA");
-            ch.appendLine(`launch luada... ${runtime} [${runtimeArgs}]`);
 
             return new vscode.DebugAdapterExecutable(runtime, runtimeArgs, { cwd: ROOT });
         }
