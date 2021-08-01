@@ -258,16 +258,6 @@ for i, arg in ipairs(args) do
     end
 end
 
-logger("luada START...")
-
--- replace global print
-print = function(...)
-    for _, v in ipairs({ ... }) do
-        -- io.stderr:write(string.format(v))
-        logger(string.format("abort: %q", v))
-    end
-end
-
 io.stdout:setvbuf("no", 0)
 io.stderr:setvbuf("no", 0)
 local DA = {
@@ -501,7 +491,20 @@ DA.launch = function(self)
     local chunk = loadfile(self.debugee.program)
 
     setfenv(chunk, {
-        print = logger,
+        print = function(...)
+            local msg = ""
+            for i, x in ipairs({ ... }) do
+                if i > 1 then
+                    msg = msg .. ", "
+                end
+                msg = msg .. string.format("%q", x)
+            end
+
+            DA:send_event("output", {
+                category = "stdout",
+                output = msg,
+            })
+        end,
     })
 
     debug.sethook(function(_, line)
@@ -662,6 +665,8 @@ DA.loop = function(self)
     end
     table.remove(self.running_stack)
 end
+
+logger("luada START...")
 
 DA:loop()
 
