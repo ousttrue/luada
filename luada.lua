@@ -242,8 +242,6 @@ end
 -- \r\n
 -- byte[length]
 ------------------------------------------------------------------------------
-DEBUGGER_NAME = "luada.lua"
-
 local args = { ... }
 local W
 local function logger(...)
@@ -258,420 +256,438 @@ for i, arg in ipairs(args) do
     end
 end
 
-io.stdout:setvbuf("no", 0)
-io.stderr:setvbuf("no", 0)
+---@class DA
+---@field input file*
+---@field output file*
+---@field next_seq number
+---@field queue any[]
+---@field running_stack boolean[]
+---@field breakpoints any[]
+---@field next_breakpoint_id number
 local DA = {
-    input = io.stdin,
-    output = io.stdout,
-    next_seq = 0,
-    queue = {},
-    running_stack = { true },
-    breakpoints = {},
-    next_breakpoint_id = 1,
-}
+    enqueue = function(self, action)
+        table.insert(self.queue, action)
+    end,
 
-DA.enqueue = function(self, action)
-    table.insert(self.queue, action)
-end
+    add_breakpoint = function(self, source, line)
+        local match = self:match_breakpoint(source, line)
+        if match then
+            return {
+                id = match.id,
+                source = {
+                    path = match.source,
+                },
+                line = match.line,
+                verified = false,
+            }
+        end
 
-DA.add_breakpoint = function(self, source, line)
-    local match = self:match_breakpoint(source, line)
-    if match then
-        return {
-            id = match.id,
+        local bp = {
+            id = self.next_breakpoint_id,
             source = {
-                path = match.source,
+                path = source,
             },
-            line = match.line,
-            verified = false,
+            line = line,
+            verified = true,
         }
-    end
+        self.next_breakpoint_id = self.next_breakpoint_id + 1
+        table.insert(self.breakpoints, bp)
+        return bp
+    end,
 
-    local bp = {
-        id = self.next_breakpoint_id,
-        source = {
-            path = source,
-        },
-        line = line,
-        verified = true,
-    }
-    self.next_breakpoint_id = self.next_breakpoint_id + 1
-    table.insert(self.breakpoints, bp)
-    return bp
-end
-
-DA.match_breakpoint = function(self, source, line)
-    for i, b in ipairs(self.breakpoints) do
-        io.stderr:write(string.format("#%s:%d <=> %s:%d#", b.source.path, b.line, source, line))
-        if b.line == line then
-            if b.source.path == source then
-                -- match
-                return b
+    match_breakpoint = function(self, source, line)
+        for i, b in ipairs(self.breakpoints) do
+            io.stderr:write(string.format("#%s:%d <=> %s:%d#", b.source.path, b.line, source, line))
+            if b.line == line then
+                if b.source.path == source then
+                    -- match
+                    return b
+                end
             end
         end
-    end
-end
+    end,
 
-DA.new_message = function(self, msg_type)
-    local msg = {
-        seq = self.next_seq,
-        type = msg_type,
-    }
-    self.next_seq = self.next_seq + 1
-    return msg
-end
-
-DA.new_response = function(self, seq, command, body)
-    local response = self:new_message("response")
-    response["success"] = true
-    response["request_seq"] = seq
-    response["command"] = command
-    if body then
-        response["body"] = body
-    end
-    return response
-end
-
-DA.new_event = function(self, event_name, body)
-    local event = {
-        type = "event",
-        event = event_name,
-    }
-    if body then
-        event.body = body
-    end
-    return event
-end
-
-DA.send_event = function(self, event_name, body)
-    local event = self:new_event(event_name, body)
-    self:send_message(event)
-end
-
-DA.push_frame = function(self, stack_level, frame, variables)
-    local stackframe = {
-        id = stack_level,
-        name = frame.name,
-        line = frame.currentline,
-        column = 1,
-    }
-    if type(frame.source) == "string" and frame.source:sub(1, 1) == "@" then
-        stackframe.source = {
-            path = frame.source:sub(2),
+    new_message = function(self, msg_type)
+        local msg = {
+            seq = self.next_seq,
+            type = msg_type,
         }
-    end
-    table.insert(self.stackframes, stackframe)
+        self.next_seq = self.next_seq + 1
+        return msg
+    end,
 
-    local scopes = {}
-    -- local
-    table.insert(scopes, {
-        name = "Locals",
-        presentationHint = "locals",
-        variablesReference = #self.variables + 1,
-        expensive = false,
-    })
-    table.insert(self.variables, variables)
-    -- upvalues
-    -- globals
-    self.scope = {
-        [stack_level] = scopes,
-    }
-end
+    new_response = function(self, seq, command, body)
+        local response = self:new_message("response")
+        response["success"] = true
+        response["request_seq"] = seq
+        response["command"] = command
+        if body then
+            response["body"] = body
+        end
+        return response
+    end,
 
---
--- debug.xxx 関数はこの関数内で呼ぶべし。他の関数に入ると stack_level を足す必要がある。
---
-DA.on_hook = function(self, stack_level, line)
-    -- hook_frame
-    local hook_frame = debug.getinfo(stack_level, "nSluf")
-    if hook_frame.source:sub(-#DEBUGGER_NAME) == DEBUGGER_NAME then
-        -- skip debugger code
-        return
-    end
+    new_event = function(self, event_name, body)
+        local event = {
+            type = "event",
+            event = event_name,
+        }
+        if body then
+            event.body = body
+        end
+        return event
+    end,
 
-    local source = hook_frame.source
-    if source:sub(1, 1) ~= "@" then
-        return
-    end
-    source = source:sub(2)
+    send_event = function(self, event_name, body)
+        local event = self:new_event(event_name, body)
+        self:send_message(event)
+    end,
 
-    local match
-    if self.next then
-        io.stderr:write("next!\n")
-        self.next = false
-    else
-        match = self:match_breakpoint(source, line)
-        if not match then
-            -- not break
+    push_frame = function(self, stack_level, frame, variables)
+        local stackframe = {
+            id = stack_level,
+            name = frame.name,
+            line = frame.currentline,
+            column = 1,
+        }
+        if type(frame.source) == "string" and frame.source:sub(1, 1) == "@" then
+            stackframe.source = {
+                path = frame.source:sub(2),
+            }
+        end
+        table.insert(self.stackframes, stackframe)
+
+        local scopes = {}
+        -- local
+        table.insert(scopes, {
+            name = "Locals",
+            presentationHint = "locals",
+            variablesReference = #self.variables + 1,
+            expensive = false,
+        })
+        table.insert(self.variables, variables)
+        -- upvalues
+        -- globals
+        self.scope = {
+            [stack_level] = scopes,
+        }
+    end,
+
+    --
+    -- debug.xxx 関数はこの関数内で呼ぶべし。他の関数に入ると stack_level を足す必要がある。
+    --
+    on_hook = function(self, stack_level, line)
+        -- hook_frame
+        local hook_frame = debug.getinfo(stack_level, "nSluf")
+        if hook_frame.source:sub(-#self.name) == self.name then
+            -- skip debugger code
             return
         end
-        -- hit breakpoint
-        io.stderr:write("break!\n")
-    end
 
-    -- clear
-    self.stackframes = {}
-    self.scope = {}
-    self.variables = {}
+        local source = hook_frame.source
+        if source:sub(1, 1) ~= "@" then
+            return
+        end
+        source = source:sub(2)
 
-    -- top
-    do
-        local variables = {}
-        local i = 1
+        local match
+        if self.next then
+            io.stderr:write("next!\n")
+            self.next = false
+        else
+            match = self:match_breakpoint(source, line)
+            if not match then
+                -- not break
+                return
+            end
+            -- hit breakpoint
+            io.stderr:write("break!\n")
+        end
+
+        -- clear
+        self.stackframes = {}
+        self.scope = {}
+        self.variables = {}
+
+        -- top
+        do
+            local variables = {}
+            local i = 1
+            while true do
+                local k, v = debug.getlocal(stack_level, i)
+                if not k then
+                    break
+                end
+                io.stderr:write(string.format("(%q)[%q = %q]", stack_level, k, v))
+                i = i + 1
+                if k ~= "(*temporary)" then
+                    table.insert(variables, {
+                        variablesReference = 0,
+                        name = k,
+                        value = v,
+                        type = type(v),
+                    })
+                end
+            end
+            self:push_frame(stack_level, hook_frame, variables)
+            stack_level = stack_level + 1
+        end
+
+        -- frames
         while true do
-            local k, v = debug.getlocal(stack_level, i)
-            if not k then
+            local frame = debug.getinfo(stack_level, "nSluf")
+            if not frame then
                 break
             end
-            io.stderr:write(string.format("(%q)[%q = %q]", stack_level, k, v))
-            i = i + 1
-            if k ~= "(*temporary)" then
+            if frame.source:sub(-#self.name) == self.name then
+                -- skip debugger code
+                break
+            end
+
+            local variables = {}
+            local i = 1
+            while true do
+                local k, v = debug.getlocal(stack_level, i)
+                if not k then
+                    break
+                end
+                io.stderr:write(string.format("(%q)[%q = %q]", stack_level, k, v))
+                i = i + 1
                 table.insert(variables, {
-                    variablesReference = 0,
                     name = k,
                     value = v,
-                    type = type(v),
                 })
             end
-        end
-        self:push_frame(stack_level, hook_frame, variables)
-        stack_level = stack_level + 1
-    end
-
-    -- frames
-    while true do
-        local frame = debug.getinfo(stack_level, "nSluf")
-        if not frame then
-            break
-        end
-        if frame.source:sub(-#DEBUGGER_NAME) == DEBUGGER_NAME then
-            -- skip debugger code
-            break
+            self:push_frame(stack_level, frame, variables)
+            stack_level = stack_level + 1
         end
 
-        local variables = {}
-        local i = 1
-        while true do
-            local k, v = debug.getlocal(stack_level, i)
-            if not k then
-                break
-            end
-            io.stderr:write(string.format("(%q)[%q = %q]", stack_level, k, v))
-            i = i + 1
-            table.insert(variables, {
-                name = k,
-                value = v,
+        -- stacktrace & scpopes
+        if match then
+            self:send_event("stopped", {
+                reason = "breakpoint",
+                threadId = 0,
+                hitBreakpointIds = { match.id },
+            })
+        else
+            self:send_event("stopped", {
+                reason = "step",
+                threadId = 0,
             })
         end
-        self:push_frame(stack_level, frame, variables)
-        stack_level = stack_level + 1
-    end
 
-    -- stacktrace & scpopes
-    if match then
-        self:send_event("stopped", {
-            reason = "breakpoint",
-            threadId = 0,
-            hitBreakpointIds = { match.id },
-        })
-    else
-        self:send_event("stopped", {
-            reason = "step",
-            threadId = 0,
-        })
-    end
+        -- start nested loop
+        io.stderr:write("[!yield!]\n")
+        table.insert(self.running_stack, true)
+        self:loop()
+    end,
 
-    -- start nested loop
-    io.stderr:write("[!yield!]\n")
-    table.insert(self.running_stack, true)
-    self:loop()
-end
+    launch = function(self)
+        local chunk = loadfile(self.debugee.program)
 
-DA.launch = function(self)
-    local chunk = loadfile(self.debugee.program)
-
-    setfenv(chunk, {
-        print = function(...)
-            local msg = ""
-            for i, x in ipairs({ ... }) do
-                if i > 1 then
-                    msg = msg .. ", "
+        setfenv(chunk, {
+            print = function(...)
+                local msg = ""
+                for i, x in ipairs({ ... }) do
+                    if i > 1 then
+                        msg = msg .. ", "
+                    end
+                    msg = msg .. string.format("%q", x)
                 end
-                msg = msg .. string.format("%q", x)
-            end
 
-            DA:send_event("output", {
-                category = "stdout",
-                output = msg,
+                self:send_event("output", {
+                    category = "stdout",
+                    output = msg,
+                })
+            end,
+        })
+
+        debug.sethook(function(_, line)
+            -- 3 hook
+            -- 2 this
+            -- 1 on_hook
+            self:on_hook(3, line)
+        end, "l")
+
+        -- run
+        self:send_event("output", {
+            category = "stderr",
+            output = "[luada]LAUNCH...",
+        })
+
+        local rc
+        local success, err = xpcall(function()
+            rc = chunk(unpack(self.debugee.args))
+        end, function(err) end)
+        if success then
+            self:send_event("output", {
+                category = "stderr",
+                output = "[luada]EXIT",
             })
-        end,
-    })
 
-    debug.sethook(function(_, line)
-        -- 3 hook
-        -- 2 this
-        -- 1 on_hook
-        self:on_hook(3, line)
-    end, "l")
-
-    -- run
-    local rc
-    local success, err = xpcall(function()
-        rc = chunk(unpack(self.debugee.args))
-    end, function(err) end)
-    if success then
-        -- exit
-        self.running_stack[#self.running_stack] = false
-        self:send_event("exited", {
-            exitCode = rc or 0,
-        })
-    else
-        -- TODO
-        logger("error: %q", err)
-    end
-end
-
-------------------------------------------------------------------------------
--- https://microsoft.github.io/debug-adapter-protocol/specification#Requests_Initialize
--- https://microsoft.github.io/debug-adapter-protocol/specification#Requests_Launch
--- https://microsoft.github.io/debug-adapter-protocol/specification#Requests_SetBreakpoints
-------------------------------------------------------------------------------
-DA.on_request = function(self, parsed)
-    if parsed.command == "initialize" then
-        self:enqueue(function()
-            self:send_event("initialized")
-        end)
-        return self:new_response(parsed.seq, parsed.command, {
-            supportsConfigurationDoneRequest = true,
-        })
-    elseif parsed.command == "launch" then
-        self.debugee = {
-            program = parsed.arguments.program,
-            args = parsed.arguments.args,
-        }
-        return self:new_response(parsed.seq, parsed.command)
-    elseif parsed.command == "setBreakpoints" then
-        local breakpoints = {}
-        for i, b in ipairs(parsed.arguments.breakpoints) do
-            local created = self:add_breakpoint(parsed.arguments.source.path, b.line)
-            if created then
-                table.insert(breakpoints, created)
-            end
+            -- exit
+            self.running_stack[#self.running_stack] = false
+            self:send_event("exited", {
+                exitCode = rc or 0,
+            })
+        else
+            self:send_event("output", {
+                category = "stderr",
+                output = string.format("[luada]%q", err),
+            })
         end
-        return self:new_response(parsed.seq, parsed.command, {
-            breakpoints = breakpoints,
-        })
-    elseif parsed.command == "configurationDone" then
-        self:enqueue(function()
-            self:launch()
-        end)
-        return self:new_response(parsed.seq, parsed.command)
-    elseif parsed.command == "threads" then
-        return self:new_response(parsed.seq, parsed.command, {
-            threads = {
-                {
-                    id = 0,
-                    name = "main",
+    end,
+
+    ------------------------------------------------------------------------------
+    -- https://microsoft.github.io/debug-adapter-protocol/specification#Requests_Initialize
+    -- https://microsoft.github.io/debug-adapter-protocol/specification#Requests_Launch
+    -- https://microsoft.github.io/debug-adapter-protocol/specification#Requests_SetBreakpoints
+    ------------------------------------------------------------------------------
+    on_request = function(self, parsed)
+        if parsed.command == "initialize" then
+            self:enqueue(function()
+                self:send_event("initialized")
+            end)
+            return self:new_response(parsed.seq, parsed.command, {
+                supportsConfigurationDoneRequest = true,
+            })
+        elseif parsed.command == "launch" then
+            self.debugee = {
+                program = parsed.arguments.program,
+                args = parsed.arguments.args,
+            }
+            return self:new_response(parsed.seq, parsed.command)
+        elseif parsed.command == "setBreakpoints" then
+            local breakpoints = {}
+            for i, b in ipairs(parsed.arguments.breakpoints) do
+                local created = self:add_breakpoint(parsed.arguments.source.path, b.line)
+                if created then
+                    table.insert(breakpoints, created)
+                end
+            end
+            return self:new_response(parsed.seq, parsed.command, {
+                breakpoints = breakpoints,
+            })
+        elseif parsed.command == "configurationDone" then
+            self:enqueue(function()
+                self:launch()
+            end)
+            return self:new_response(parsed.seq, parsed.command)
+        elseif parsed.command == "threads" then
+            return self:new_response(parsed.seq, parsed.command, {
+                threads = {
+                    {
+                        id = 0,
+                        name = "main",
+                    },
                 },
-            },
-        })
-    elseif parsed.command == "stackTrace" then
-        return self:new_response(parsed.seq, parsed.command, {
-            stackFrames = self.stackframes,
-        })
-    elseif parsed.command == "scopes" then
-        return self:new_response(parsed.seq, parsed.command, {
-            scopes = self.scope[parsed.arguments.frameId],
-        })
-    elseif parsed.command == "variables" then
-        return self:new_response(parsed.seq, parsed.command, {
-            variables = self.variables[parsed.arguments.variablesReference],
-        })
-    elseif parsed.command == "continue" then
-        self.running_stack[#self.running_stack] = false
-        return self:new_response(parsed.seq, parsed.command)
-    elseif parsed.command == "next" then
-        self.next = true
-        self.running_stack[#self.running_stack] = false
-        return self:new_response(parsed.seq, parsed.command)
-    else
-        error(string.format("unknown command: %q", parsed))
-    end
+            })
+        elseif parsed.command == "stackTrace" then
+            return self:new_response(parsed.seq, parsed.command, {
+                stackFrames = self.stackframes,
+            })
+        elseif parsed.command == "scopes" then
+            return self:new_response(parsed.seq, parsed.command, {
+                scopes = self.scope[parsed.arguments.frameId],
+            })
+        elseif parsed.command == "variables" then
+            return self:new_response(parsed.seq, parsed.command, {
+                variables = self.variables[parsed.arguments.variablesReference],
+            })
+        elseif parsed.command == "continue" then
+            self.running_stack[#self.running_stack] = false
+            return self:new_response(parsed.seq, parsed.command)
+        elseif parsed.command == "next" then
+            self.next = true
+            self.running_stack[#self.running_stack] = false
+            return self:new_response(parsed.seq, parsed.command)
+        else
+            error(string.format("unknown command: %q", parsed))
+        end
+    end,
+
+    on_message = function(self, parsed)
+        if parsed.type == "request" then
+            return self:on_request(parsed)
+        else
+            error(string.format("unknown type: %q", parsed))
+        end
+    end,
+
+    send_message = function(self, message)
+        local encoded = json.stringify(message)
+        logger("<= %q", encoded)
+
+        if encoded:find("\n") then
+            error("contain LF")
+        end
+        local encoded_length = string.len(encoded)
+        local msg = string.format("Content-Length: %d", encoded_length)
+        if package.config:sub(1, 1) == "\\" then
+            -- windows
+            msg = msg .. "\n\n"
+        else
+            msg = msg .. "\r\n\r\n"
+        end
+        msg = msg .. encoded
+        self.output:write(msg)
+        self.output:flush()
+    end,
+
+    process_message = function(self)
+        -- dequeue
+        while #self.queue > 0 do
+            local action = table.remove(self.queue, 1)
+            action()
+        end
+
+        -- read
+        local l = self.input:read("*l")
+
+        local m = string.match(l, "Content%-Length: (%d+)")
+        local length = tonumber(m)
+        self.input:read("*l") -- skip empty line
+        local body = self.input:read(length)
+
+        logger("=> %q", body)
+
+        local parsed = json.parse(body)
+        local response = self:on_message(parsed)
+        if response then
+            self:send_message(response)
+        end
+    end,
+
+    loop = function(self)
+        while self.running_stack[#self.running_stack] do
+            self:process_message()
+        end
+        table.remove(self.running_stack)
+    end,
+}
+DA.new = function()
+    local instance = {
+        name = "luada.lua",
+        input = io.stdin,
+        output = io.stdout,
+        next_seq = 0,
+        queue = {},
+        running_stack = { true },
+        breakpoints = {},
+        next_breakpoint_id = 1,
+    }
+    DA.__index = DA
+    setmetatable(instance, DA)
+    return instance
 end
 
-DA.on_message = function(self, parsed)
-    if parsed.type == "request" then
-        return self:on_request(parsed)
-    else
-        error(string.format("unknown type: %q", parsed))
-    end
-end
+io.stdout:setvbuf("no", 0)
+io.stderr:setvbuf("no", 0)
 
-DA.send_message = function(self, message)
-    local encoded = json.stringify(message)
-    logger("<= %q", encoded)
+local da = DA.new()
 
-    if encoded:find("\n") then
-        error("contain LF")
-    end
-    local encoded_length = string.len(encoded)
-    local msg = string.format("Content-Length: %d", encoded_length)
-    if package.config:sub(1, 1) == "\\" then
-        -- windows
-        msg = msg .. "\n\n"
-    else
-        msg = msg .. "\r\n\r\n"
-    end
-    msg = msg .. encoded
-    self.output:write(msg)
-    self.output:flush()
-end
-
-DA.process_message = function(self)
-    -- dequeue
-    while #self.queue > 0 do
-        local action = table.remove(self.queue, 1)
-        action()
-    end
-
-    -- read
-    local l = self.input:read("*l")
-
-    local m = string.match(l, "Content%-Length: (%d+)")
-    local length = tonumber(m)
-    self.input:read("*l") -- skip empty line
-    local body = self.input:read(length)
-
-    logger("=> %q", body)
-
-    local parsed = json.parse(body)
-    local response = DA:on_message(parsed)
-    if response then
-        self:send_message(response)
-    end
-end
-
--- local function format_table(t)
--- 	local tmp = "["
--- 	for k, v in pairs(t) do
--- 		tmp = tmp .. string.format("%q = %q, ", k, v)
--- 	end
--- 	return tmp .. "]"
--- end
-
-DA.loop = function(self)
-    while self.running_stack[#self.running_stack] do
-        DA:process_message()
-    end
-    table.remove(self.running_stack)
-end
-
-logger("luada START...")
-
-DA:loop()
+da:loop()
 
 if W then
     io.close(W)
 end
-
-logger("[luada]exit")
