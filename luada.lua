@@ -458,7 +458,7 @@ local DA = {
                     table.insert(variables, {
                         variablesReference = 0,
                         name = k,
-                        value = v,
+                        value = tostring(v),
                         type = type(v),
                     })
                 end
@@ -584,6 +584,7 @@ local DA = {
             end)
             return self:new_response(parsed.seq, parsed.command, {
                 supportsConfigurationDoneRequest = true,
+                supportsVariableType = true,
             })
         elseif parsed.command == "launch" then
             self.debugee = {
