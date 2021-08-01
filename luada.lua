@@ -308,7 +308,7 @@ local DA = {
     match_breakpoint = function(self, source, line)
         for i, b in ipairs(self.breakpoints) do
             self:send_message("output", {
-                category = "stderr",
+                category = "console",
                 output = string.format("#%s:%d <=> %s:%d#", b.source.path, b.line, source, line),
             })
             if b.line == line then
@@ -406,7 +406,7 @@ local DA = {
         local match
         if self.next then
             self:send_event("output", {
-                category = "stderr",
+                category = "console",
                 output = "next!\n",
             })
             self.next = false
@@ -418,7 +418,7 @@ local DA = {
             end
             -- hit breakpoint
             self:send_event("output", {
-                category = "stderr",
+                category = "console",
                 output = "break!\n",
             })
         end
@@ -530,7 +530,7 @@ local DA = {
 
         -- run
         self:send_event("output", {
-            category = "stderr",
+            category = "console",
             output = string.format("[luada]LAUNCH: %s...\n", self.debugee.program)
         })
 
@@ -540,7 +540,7 @@ local DA = {
         end, function(err) end)
         if success then
             self:send_event("output", {
-                category = "stderr",
+                category = "console",
                 output = "[luada]EXIT\n",
             })
 
@@ -551,7 +551,7 @@ local DA = {
             })
         else
             self:send_event("output", {
-                category = "stderr",
+                category = "console",
                 output = string.format("[luada]%q\n", err),
             })
         end
@@ -581,7 +581,7 @@ local DA = {
             for i, b in ipairs(parsed.arguments.breakpoints) do
                 local created = self:add_breakpoint(parsed.arguments.source.path, b.line)
                 self:send_event("output", {
-                    category = "stderr",
+                    category = "console",
                     output = string.format("created: %s\n", created),
                 })
                 if created then
