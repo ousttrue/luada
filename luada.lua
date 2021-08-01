@@ -428,9 +428,13 @@ local DA = {
                 return
             end
             -- hit breakpoint
+            local s = ""
+            for k, v in pairs(hook_frame) do
+                s = s.. string.format(", %s=%s", k, v)
+            end
             self:send_event("output", {
                 category = "console",
-                output = "break!\n",
+                output = string.format("[luada]break {%s} %s:%d == %s\n", s, source, line, match),
             })
         end
 
@@ -596,7 +600,6 @@ local DA = {
                     output = string.format("created: %s\n", created),
                 })
                 if created then
-                    setmetatable(created, nil)
                     table.insert(breakpoints, created)
                 end
             end
